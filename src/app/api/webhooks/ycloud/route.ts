@@ -129,6 +129,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     // No resolvable workspace → 401. A status update without a resolvable
     // (and below, verified) workspace must NEVER fall through to 200.
     if (!ws) {
+      // Reason codes only — no credentials, phone numbers or payload (SEC-09).
+      console.warn(
+        wsidParam
+          ? "[webhook] ycloud 401: no enabled ycloud integration for the ?wsid workspace"
+          : "[webhook] ycloud 401: no enabled ycloud integration matches the destination number (no ?wsid in the URL)",
+      );
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
@@ -145,11 +151,22 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     const webhookSecret = creds.webhook_signing_secret;
     if (!webhookSecret) {
+      console.warn(
+        "[webhook] ycloud 401: integration has no webhook signing secret saved",
+        { workspaceId: ws.workspace_id },
+      );
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     // CRITICAL: verify the signature BEFORE acting on ANY event (status or inbound).
     if (!verifyYCloudSignature(rawBody, sigHeader, webhookSecret)) {
+      // Booleans only — never the secret, the signature or the body (SEC-09).
+      // `secretHasWhitespace` flags a secret pasted with a stray space/newline.
+      console.warn("[webhook] ycloud 401: signature check failed", {
+        workspaceId: ws.workspace_id,
+        hasSignatureHeader: Boolean(sigHeader),
+        secretHasWhitespace: webhookSecret !== webhookSecret.trim(),
+      });
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
