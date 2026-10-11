@@ -24,7 +24,13 @@ export type MessageType =
 export interface ContactRow {
   id: string;
   workspace_id: string;
-  phone: string;
+  /** Null for a contact known only by its WhatsApp BSUID (a username user). */
+  phone: string | null;
+  /** WhatsApp business-scoped user ID; set once the contact has written in. */
+  bsuid?: string | null;
+  parent_bsuid?: string | null;
+  /** The contact's WhatsApp username: profile data, never an identity key. */
+  username?: string | null;
   name: string | null;
   email: string | null;
   stage: string | null;

@@ -64,7 +64,8 @@ export interface HLContact {
 interface ContactRow {
   id: string;
   name: string | null;
-  phone: string;
+  /** Null for a contact known only by its WhatsApp username. */
+  phone: string | null;
   email: string | null;
   tags: string[] | null;
   hl_contact_id: string | null;
@@ -363,6 +364,15 @@ export async function syncContactToHL(
   }
 
   const contact = contactData as ContactRow;
+  // HighLevel matches contacts by phone: one that uses a WhatsApp username and
+  // has not shared its number waits until it does.
+  if (!contact.phone) {
+    console.warn("[HL] syncContactToHL: contact has no phone yet, skipping", {
+      workspaceId,
+      contactId,
+    });
+    return null;
+  }
   const { firstName, lastName } = splitName(contact.name);
 
   // Create (with locationId) or update by hl_contact_id. Never with `tags`:
@@ -732,6 +742,15 @@ export async function createHLOpportunity(
   // phone (and persist it so future syncs find it).
   let hlContactId = contact.hl_contact_id;
   if (!hlContactId) {
+    // HighLevel matches by phone: a contact with only a WhatsApp username
+    // can't be created there until it shares its number.
+    if (!contact.phone) {
+      console.warn("[HL] createHLOpportunity: contact has no phone yet, skipping", {
+        workspaceId,
+        contactId,
+      });
+      return null;
+    }
     hlContactId = await upsertHLContactByPhone(cfg, {
       name: contact.name,
       phone: contact.phone,
@@ -746,7 +765,7 @@ export async function createHLOpportunity(
     return null;
   }
 
-  const name = opts?.name?.trim() || contact.name || contact.phone;
+  const name = opts?.name?.trim() || contact.name || contact.phone || "Lead de WhatsApp";
 
   const payload: Record<string, unknown> = {
     pipelineId: cfg.pipelineId,

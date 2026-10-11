@@ -334,6 +334,35 @@ restricciones de tablas grandes (mensajes) y las bloquean unos segundos.
 El orden importa: el código nuevo puede depender de funciones o permisos que traen
 las migraciones, así que las migraciones van **antes** de `vercel --prod`.
 
+**Usuarios con nombre de usuario de WhatsApp (versión de oct-2026, solo YCloud):**
+
+WhatsApp permite que una persona escriba a un negocio **sin compartir su teléfono**:
+el webhook trae entonces solo su identificador (BSUID, `fromUserId`) y sin esta
+versión el mensaje se descartaba sin aviso. Ahora:
+
+- La migración `20261011000001_contacts_bsuid.sql` (va **antes** del deploy, como
+  siempre) permite contactos sin teléfono y guarda el BSUID aparte. Es aditiva: no
+  cambia ni borra datos.
+- Un contacto puede ser un teléfono, un BSUID o ambos. Si el teléfono aparece
+  después (el cliente lo comparte, o WhatsApp lo entrega), se une al **mismo**
+  contacto. Si el BSUID y el teléfono ya eran dos contactos distintos, no se mueve
+  nada: queda un evento `contact_identity_conflict` (uno al día) para que el equipo
+  los una a mano.
+- El agente y el equipo le responden por el BSUID (`recipient` en la API de
+  YCloud). En el inbox aparece su `@usuario`, o «Sin número».
+- En el chat, el botón **Pedir teléfono** le manda a ese contacto el botón de
+  WhatsApp «Compartir datos de contacto». Si lo acepta, su número se guarda en el
+  mismo contacto. Un contacto que reenvía la tarjeta de **otra persona** no
+  cambia el suyo, y solo se pide una vez al día.
+- Si el cliente cambia de número, WhatsApp avisa y el contacto se actualiza solo
+  (sin respuesta del agente).
+- **Sin teléfono no hay**: sincronización con HighLevel ni HubSpot (identifican por
+  número; el botón de sincronizar lo explica), ni la variable `{{contact.phone}}`
+  en plantillas, ni mensajes de **autenticación** (códigos OTP). Un STOP de un
+  contacto sin teléfono sí lo da de baja de plantillas y automatizaciones.
+- **Kapso** no cambia: no responde a contactos sin teléfono (el envío falla con un
+  motivo en español).
+
 **Cambios de permisos y límites (versión de finales de sep-2026):**
 
 - En **Configuración → Integraciones** (WhatsApp, OpenRouter y HighLevel) solo un

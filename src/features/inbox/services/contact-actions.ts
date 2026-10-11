@@ -165,7 +165,7 @@ export async function syncContactCrm(
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
   )
     .from("contacts")
-    .select("workspace_id")
+    .select("workspace_id, phone")
     .eq("id", contactId)
     .maybeSingle();
   if (contactError) {
@@ -173,7 +173,10 @@ export async function syncContactCrm(
     return { ok: false, error: "No pudimos comprobar el contacto. Intenta de nuevo." };
   }
   if (!contact) return { ok: false, error: "No encontramos el contacto" };
-  const workspaceId = (contact as { workspace_id: string }).workspace_id;
+  const { workspace_id: workspaceId, phone } = contact as {
+    workspace_id: string;
+    phone: string | null;
+  };
 
   const member = await checkWorkspaceMember(workspaceId, { minRole: "agent" });
   if (!member.ok) {
@@ -181,6 +184,16 @@ export async function syncContactCrm(
     // Mismo mensaje para "no existe" y "de otro tenant": no confirmar ids ajenos.
     if (member.reason === "not_member") return { ok: false, error: "No encontramos el contacto" };
     return { ok: false, error: "Tu rol solo permite ver el contacto, no editarlo" };
+  }
+
+  // Los CRM identifican a cada cliente por su teléfono: un contacto que usa
+  // nombre de usuario de WhatsApp y no lo compartió no se puede enlazar aún.
+  if (!phone) {
+    return {
+      ok: false,
+      error:
+        "Este contacto aún no compartió su número de teléfono, y el CRM identifica a los clientes por su número. Pídeselo desde el chat con «Pedir teléfono».",
+    };
   }
 
   let result: Awaited<ReturnType<typeof syncContactManually>>;

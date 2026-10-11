@@ -26,13 +26,27 @@ export interface WhatsAppSender {
   label: string;
   /** False for a missing/"placeholder" key: dev mode, nothing is sent. */
   live: boolean;
-  sendText(to: string, body: string): Promise<SendResult>;
+  /**
+   * `to` is the contact's phone; `bsuid` is used when it has none (a WhatsApp
+   * username user, YCloud only). Kapso needs the phone.
+   */
+  sendText(to: string | null, body: string, bsuid?: string | null): Promise<SendResult>;
   sendTemplate(params: {
-    to: string;
+    to: string | null;
+    bsuid?: string | null;
     templateName: string;
     language?: string;
     components?: TemplateComponents;
   }): Promise<SendResult>;
+  /**
+   * WhatsApp's "share contact info" request: how a contact known only by BSUID
+   * is asked for their phone. YCloud only.
+   */
+  requestContactInfo(
+    to: string | null,
+    body: string,
+    bsuid?: string | null,
+  ): Promise<SendResult>;
 }
 
 /**
@@ -60,6 +74,16 @@ function requireSenderId(value: string, what: string, label: string): string {
   return value;
 }
 
+/** Kapso addresses people by phone: a contact with only a BSUID can't be sent to. */
+function requirePhone(to: string | null, label: string): string {
+  if (!to) {
+    throw new WhatsAppConfigError(
+      `Este contacto solo tiene su identificador de usuario de WhatsApp (no compartió su número) y ${label} aún no permite escribirle así: pídele su número por otro medio.`,
+    );
+  }
+  return to;
+}
+
 export function whatsappSender(
   provider: WhatsAppProvider,
   credentials: Record<string, unknown>,
@@ -81,7 +105,7 @@ export function whatsappSender(
         const sent = await kapso.sendText({
           apiKey,
           phoneNumberId: phoneNumberId(),
-          to,
+          to: requirePhone(to, label),
           body,
         });
         return { wamid: sent.wamid || undefined };
@@ -90,12 +114,17 @@ export function whatsappSender(
         const sent = await kapso.sendTemplate({
           apiKey,
           phoneNumberId: phoneNumberId(),
-          to,
+          to: requirePhone(to, label),
           templateName,
           language,
           components,
         });
         return { wamid: sent.wamid || undefined };
+      },
+      async requestContactInfo() {
+        throw new WhatsAppConfigError(
+          `${label} aún no permite pedir el número de teléfono con el botón de WhatsApp.`,
+        );
       },
     };
   }
@@ -106,21 +135,41 @@ export function whatsappSender(
     provider,
     label,
     live,
-    async sendText(to, body) {
-      const sent = await ycloud.sendText({ apiKey, from: from(), to, body });
+    async sendText(to, body, bsuid) {
+      const sent = await ycloud.sendText({
+        apiKey,
+        from: from(),
+        to,
+        recipient: bsuid,
+        body,
+      });
       return {
         wamid: sent.wamid || undefined,
         providerMessageId: sent.id || undefined,
       };
     },
-    async sendTemplate({ to, templateName, language, components }) {
+    async sendTemplate({ to, bsuid, templateName, language, components }) {
       const sent = await ycloud.sendTemplate({
         apiKey,
         from: from(),
         to,
+        recipient: bsuid,
         templateName,
         language,
         components,
+      });
+      return {
+        wamid: sent.wamid || undefined,
+        providerMessageId: sent.id || undefined,
+      };
+    },
+    async requestContactInfo(to, body, bsuid) {
+      const sent = await ycloud.sendRequestContactInfo({
+        apiKey,
+        from: from(),
+        to,
+        recipient: bsuid,
+        body,
       });
       return {
         wamid: sent.wamid || undefined,

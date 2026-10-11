@@ -9,6 +9,7 @@ import {
   UserCheck,
   BarChart2,
   Bot,
+  Phone,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
@@ -16,6 +17,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { contactHandle, contactTitle } from "@/features/inbox/lib/contact-display";
 import { useRealtimeMessages } from "@/features/inbox/hooks/use-realtime-messages";
 import type { WorkspaceRole } from "@/features/inbox/hooks/use-role";
 import {
@@ -54,6 +56,7 @@ export function ChatThread({
   const [showCrm, setShowCrm] = useState(false);
   const [showObservability, setShowObservability] = useState(false);
   const [handoffLoading, setHandoffLoading] = useState(false);
+  const [askingPhone, setAskingPhone] = useState(false);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [noteMode, setNoteMode] = useState(false);
@@ -100,6 +103,28 @@ export function ChatThread({
       toast.error("Error al enviar");
     } finally {
       setSending(false);
+    }
+  };
+
+  // A contact who uses a WhatsApp username arrives without a phone number:
+  // WhatsApp's "share contact info" button asks for it, and they decide.
+  const handleRequestPhone = async () => {
+    if (askingPhone) return;
+    setAskingPhone(true);
+    try {
+      const res = await fetch(`/api/conversations/${conversation.id}/request-phone`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        toast.error((data as { error?: string }).error ?? "No se pudo pedir el teléfono");
+        return;
+      }
+      toast.success("Le pedimos su número de teléfono");
+    } catch {
+      toast.error("No se pudo pedir el teléfono");
+    } finally {
+      setAskingPhone(false);
     }
   };
 
@@ -207,14 +232,32 @@ export function ChatThread({
         >
           <div className="space-y-0.5 min-w-0">
             <h2 className="font-display text-sm font-semibold text-foreground truncate">
-              {conversation.contact.name ?? conversation.contact.phone}
+              {contactTitle(conversation.contact)}
             </h2>
             <p className="font-mono text-[10px] text-muted-foreground">
-              {conversation.contact.phone}
+              {contactHandle(conversation.contact)}
             </p>
           </div>
 
           <div className="flex items-center gap-1 shrink-0">
+            {/* Ask for the phone — only for a contact known by username alone */}
+            {!conversation.contact.phone && (
+              <RoleGate role={role} check={canSendMessages}>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={handleRequestPhone}
+                  disabled={askingPhone}
+                  aria-label="Pedir el número de teléfono al contacto"
+                  className="h-8 gap-1.5 text-xs"
+                >
+                  <Phone className="h-3.5 w-3.5" aria-hidden="true" />
+                  Pedir teléfono
+                </Button>
+              </RoleGate>
+            )}
+
             {/* Handoff button — gated by role */}
             {conversation.state === "ai_active" && (
               <RoleGate role={role} check={canHandoff}>

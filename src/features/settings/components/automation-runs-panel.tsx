@@ -133,10 +133,10 @@ export function AutomationRunsPanel({ workspaceId }: { workspaceId: string }) {
                   <td className="p-2">
                     {r.conversation_id ? (
                       <Link href={`/inbox/${r.conversation_id}`} className="underline underline-offset-2">
-                        {r.contact?.name || r.contact?.phone || "Conversación"}
+                        {r.contact?.name || r.contact?.phone || r.contact?.username || "Conversación"}
                       </Link>
                     ) : (
-                      (r.contact?.name || r.contact?.phone) ?? "—"
+                      (r.contact?.name || r.contact?.phone || r.contact?.username) ?? "—"
                     )}
                   </td>
                   <td className="p-2">

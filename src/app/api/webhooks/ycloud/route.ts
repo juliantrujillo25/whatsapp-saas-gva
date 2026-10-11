@@ -246,10 +246,20 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
 
     const workspaceId = ws.workspace_id as string;
-    const { contact, conversation, message } = await processInbound(
+    const { contact, conversation, message, identityConflict } = await processInbound(
       workspaceId,
       normalized,
     );
+
+    // A BSUID or phone that another contact already owns: two rows for one
+    // person. The message is stored; the team merges them (once a day).
+    if (identityConflict) {
+      after(() =>
+        emitEventOncePerDay(supabase, workspaceId, "contact_identity_conflict", "warn", {
+          contact_id: contact.id,
+        }),
+      );
+    }
 
     // Duplicate wamid — already processed
     if (!message) {
@@ -308,6 +318,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           }
         }
       : null;
+
+    // A system notice (the customer changed their number) is recorded and has
+    // already updated the contact: there is nothing to answer.
+    if (normalized.rawType === "system") {
+      return NextResponse.json({ received: true, system: true });
+    }
 
     // A reaction is recorded in the thread, but it isn't something to answer:
     // it must not start a paid agent turn.

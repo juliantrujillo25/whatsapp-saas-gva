@@ -23,7 +23,7 @@ export interface RunListItem {
   finished_at: string | null;
   conversation_id: string | null;
   rule: { name: string } | null;
-  contact: { name: string | null; phone: string } | null;
+  contact: { name: string | null; phone: string | null; username?: string | null } | null;
 }
 
 /**
@@ -67,7 +67,7 @@ export async function listAutomationRuns(
   let query = db
     .from("automation_runs")
     .select(
-      "id, status, error, trigger_type, attempts, created_at, finished_at, conversation_id, rule:automation_rules(name), contact:contacts(name, phone)",
+      "id, status, error, trigger_type, attempts, created_at, finished_at, conversation_id, rule:automation_rules(name), contact:contacts(name, phone, username)",
     )
     .eq("workspace_id", workspaceId);
   if (opts.filter === "pending") query = query.in("status", ["pending", "processing"]);

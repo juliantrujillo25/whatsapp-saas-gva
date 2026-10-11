@@ -82,6 +82,12 @@ export interface DispatchTextParams {
   noteWhenBlocked?: boolean;
   /** Extra keys for the outbound row's meta (e.g. the buffer's batch_id). */
   meta?: Record<string, unknown>;
+  /**
+   * What goes out. `request_contact_info` is WhatsApp's "share your phone
+   * number" button, with `body` as the text above it: how a contact known only
+   * by BSUID is asked for their number. Recorded in the thread as a text.
+   */
+  kind?: "text" | "request_contact_info";
 }
 
 export interface DispatchTemplateParams {
@@ -152,7 +158,9 @@ function toWhatsAppError(sendErr: unknown): WhatsAppError {
 // ──────────────────────────────────────────────────────────────────────────────
 
 interface ContactPhoneRow {
-  phone: string;
+  /** Null for a contact known only by its WhatsApp BSUID (a username user). */
+  phone: string | null;
+  bsuid: string | null;
   opt_in: boolean | null;
 }
 
@@ -188,7 +196,9 @@ async function loadConversationAndPhone(
   supabase: Db,
 ): Promise<{
   window_expires_at: string | null;
-  toPhone: string;
+  toPhone: string | null;
+  /** Used to address a contact that has no phone. */
+  toBsuid: string | null;
   optIn: boolean;
 } | null> {
   const { data: conv, error: convError } = await supabase
@@ -207,7 +217,7 @@ async function loadConversationAndPhone(
 
   const { data: contact, error: contactError } = await supabase
     .from("contacts")
-    .select("phone, opt_in")
+    .select("phone, bsuid, opt_in")
     .eq("id", convRow.contact_id)
     .eq("workspace_id", workspaceId)
     .maybeSingle();
@@ -221,6 +231,7 @@ async function loadConversationAndPhone(
   return {
     window_expires_at: convRow.window_expires_at,
     toPhone: contactRow.phone,
+    toBsuid: contactRow.bsuid ?? null,
     optIn: contactRow.opt_in !== false,
   };
 }
@@ -443,6 +454,7 @@ export async function dispatchText(
     overrideAdmin = false,
     recordRetryableFailure = true,
     noteWhenBlocked = false,
+    kind = "text",
   } = params;
 
   // Normalise Markdown → WhatsApp formatting (e.g. **bold** → *bold*) once, so
@@ -461,7 +473,7 @@ export async function dispatchText(
     if (noteWhenBlocked) await logNotFound(supabase, workspaceId, conversationId);
     return NOT_FOUND;
   }
-  const { window_expires_at, toPhone } = loaded;
+  const { window_expires_at, toPhone, toBsuid } = loaded;
 
   // No opt-out check here, on purpose: STOP stops automations and
   // templates (the proactive messages), not the replies the agent or the team
@@ -492,6 +504,7 @@ export async function dispatchText(
     ...(params.meta ?? {}),
     dev_mode: sender.live ? undefined : true,
     override_admin: overrideAdmin || undefined,
+    interactive: kind === "request_contact_info" ? "request_contact_info" : undefined,
   };
 
   // 4. Queue the row. The DB trigger trg_messages_24h_window fires here: with
@@ -541,8 +554,11 @@ export async function dispatchText(
     workspaceId,
     rowId: queued.id,
     rowMeta,
-    send: () => sender.sendText(toPhone, body),
-    what: "sendText",
+    send: () =>
+      kind === "request_contact_info"
+        ? sender.requestContactInfo(toPhone, body, toBsuid)
+        : sender.sendText(toPhone, body, toBsuid),
+    what: kind === "request_contact_info" ? "requestContactInfo" : "sendText",
     recordRetryableFailure,
   });
 
@@ -569,7 +585,9 @@ export interface PreparedTemplateDispatch {
   senderUserId?: string;
   /** Extra keys for the outbound row's meta (e.g. the automation run). */
   meta?: Record<string, unknown>;
-  toPhone: string;
+  toPhone: string | null;
+  /** Used to address a contact that has no phone. */
+  toBsuid: string | null;
   sender: WhatsAppSender;
 }
 
@@ -697,6 +715,7 @@ export async function prepareTemplateDispatch(
       senderUserId,
       meta,
       toPhone: loaded.toPhone,
+      toBsuid: loaded.toBsuid,
       sender,
     },
   };
@@ -721,6 +740,7 @@ export async function sendPreparedTemplate(
     senderUserId,
     meta,
     toPhone,
+    toBsuid,
     sender,
   } = prepared;
   const supabase = svc();
@@ -766,6 +786,7 @@ export async function sendPreparedTemplate(
     send: () =>
       sender.sendTemplate({
         to: toPhone,
+        bsuid: toBsuid,
         templateName,
         language: templateLanguage,
         components,

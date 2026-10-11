@@ -12,10 +12,15 @@ const tables: Record<string, Row[]> = {
   conversations: [
     { id: "conv_a", workspace_id: "ws_a", contact_id: "ct_a", window_expires_at: null },
     { id: "conv_b", workspace_id: "ws_b", contact_id: "ct_b", window_expires_at: null },
+    // A contact who uses a WhatsApp username: known by BSUID only, no phone.
+    { id: "conv_u", workspace_id: "ws_a", contact_id: "ct_u", window_expires_at: null },
+    { id: "conv_ub", workspace_id: "ws_b", contact_id: "ct_ub", window_expires_at: null },
   ],
   contacts: [
     { id: "ct_a", workspace_id: "ws_a", phone: "+15550000001", opt_in: true },
     { id: "ct_b", workspace_id: "ws_b", phone: "+15550000002", opt_in: true },
+    { id: "ct_u", workspace_id: "ws_a", phone: null, bsuid: "CO.123", opt_in: true },
+    { id: "ct_ub", workspace_id: "ws_b", phone: null, bsuid: "CO.456", opt_in: true },
   ],
   integrations: [
     {
@@ -167,6 +172,10 @@ mock.module("./ycloud-client.ts", {
     sendTemplate: async (p: Record<string, unknown>) => {
       sends.push({ provider: "ycloud", kind: "template", ...p });
       return { id: "yc_tpl", wamid: "wamid_tpl" };
+    },
+    sendRequestContactInfo: async (p: Record<string, unknown>) => {
+      sends.push({ provider: "ycloud", kind: "request_contact_info", ...p });
+      return { id: "yc_rci", wamid: "wamid_rci" };
     },
   },
 });
@@ -543,4 +552,73 @@ test("a phone that opted out is refused a template even if its contact row says 
 
   const other = await dispatchTemplate({ workspaceId: "ws_b", conversationId: "conv_b", templateName: "welcome" });
   assert.equal(other.ok, true, "another workspace's suppression doesn't apply");
+});
+
+
+// ── Contacts known only by their WhatsApp BSUID (username users) ─────────────
+
+test("a BSUID-only contact is written to by its BSUID, with no phone", async () => {
+  reset();
+  const res = await dispatchText({ workspaceId: "ws_a", conversationId: "conv_u", body: "hola" });
+  assert.equal(res.ok, true);
+  assert.equal(sends[0].provider, "ycloud");
+  assert.equal(sends[0].to, null);
+  assert.equal(sends[0].recipient, "CO.123");
+  assert.equal(msgs()[0].status, "sent");
+});
+
+test("a template to a BSUID-only contact goes by BSUID too", async () => {
+  reset();
+  const prep = await prepareTemplateDispatch({
+    workspaceId: "ws_a",
+    conversationId: "conv_u",
+    templateName: "welcome",
+  });
+  assert.equal(prep.ok, true);
+  if (!prep.ok) return;
+  assert.equal(prep.prepared.toPhone, null);
+  assert.equal(prep.prepared.toBsuid, "CO.123");
+  const sent = await sendPreparedTemplate(prep.prepared);
+  assert.equal(sent.ok, true);
+  assert.equal(sends[0].to, null);
+  assert.equal(sends[0].recipient, "CO.123");
+});
+
+test("an opted-out BSUID-only contact is refused a template like any other", async () => {
+  reset();
+  (tables.contacts.find((c) => c.id === "ct_u") as Row).opt_in = false;
+  try {
+    const tpl = await dispatchTemplate({ workspaceId: "ws_a", conversationId: "conv_u", templateName: "welcome" });
+    assert.equal(tpl.errorCode, "OPT_OUT");
+    assert.equal(sends.length, 0);
+  } finally {
+    (tables.contacts.find((c) => c.id === "ct_u") as Row).opt_in = true;
+  }
+});
+
+test("asking a username contact for their phone sends WhatsApp's share-contact request", async () => {
+  reset();
+  const res = await dispatchText({
+    workspaceId: "ws_a",
+    conversationId: "conv_u",
+    body: "¿Nos compartes tu número?",
+    kind: "request_contact_info",
+  });
+  assert.equal(res.ok, true);
+  assert.equal(sends[0].kind, "request_contact_info");
+  assert.equal(sends[0].recipient, "CO.123");
+  assert.equal(sends[0].body, "¿Nos compartes tu número?");
+  // Recorded in the thread as a text, marked so the repeat guard can find it.
+  assert.equal(msgs()[0].type, "text");
+  assert.equal((msgs()[0].meta as Row).interactive, "request_contact_info");
+});
+
+test("Kapso can't reach a BSUID-only contact: the row fails with a clear Spanish reason", async () => {
+  reset();
+  const res = await dispatchText({ workspaceId: "ws_b", conversationId: "conv_ub", body: "hola" });
+  assert.equal(res.ok, false);
+  assert.equal(res.errorCode, "SEND_FAILED");
+  assert.match(res.error ?? "", /solo tiene su identificador de usuario/);
+  assert.equal(sends.length, 0, "the provider is never called");
+  assert.equal(msgs()[0].status, "failed");
 });
