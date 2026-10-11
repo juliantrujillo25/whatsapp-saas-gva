@@ -25,14 +25,19 @@ const unused = async () => {
   throw new Error("not expected in this test");
 };
 let inboundCalls = 0;
+/** What the next processInbound reports for a contact it could not merge. */
+let nextIdentityConflict = false;
+const processed: Array<Record<string, unknown>> = [];
 mock.module("@/features/inbox/services/normalizer.ts", {
   exports: {
-    processInbound: async () => {
+    processInbound: async (_ws: string, normalized: Record<string, unknown>) => {
       inboundCalls++;
+      processed.push(normalized);
       return {
         contact: { id: "ct_1" },
         conversation: { id: "conv_1", ai_enabled: true },
         message: { id: "msg_1" },
+        identityConflict: nextIdentityConflict,
       };
     },
   },
@@ -252,4 +257,75 @@ test("bare digits with the workspace's code are enforced; a + number never needs
   await inbound("+15550000000", { type: "reaction", reaction: { emoji: "👍" } });
   assert.deepEqual(countryCodeCalls, [], "no business_info read on the common path");
   await settled();
+});
+
+
+// ── Contacts known only by their WhatsApp BSUID (username users) ─────────────
+
+test("a username user's message (BSUID, no phone) is stored and buffered for the agent", async () => {
+  // The shortest silence window the app allows, so the fast path doesn't hold
+  // this test for the 30 s default.
+  const original = ROW.config;
+  ROW.config = { ...original, buffer_silence_seconds: 3 };
+  inboundCalls = 0;
+  batchCalls = 0;
+  processed.length = 0;
+  const res = await inbound("+15550000000", {
+    type: "text",
+    text: { body: "hola" },
+    from: undefined,
+    fromUserId: "CO.123",
+    customerProfile: { name: "Yan", username: "yan_co" },
+  });
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).buffered, true);
+  assert.equal(inboundCalls, 1);
+  assert.equal(batchCalls, 1);
+  assert.equal(processed[0].from, null);
+  assert.equal(processed[0].bsuid, "CO.123");
+  assert.equal(processed[0].username, "yan_co");
+  await settled();
+  ROW.config = original;
+});
+
+test("a number-change notice updates the contact but never starts an agent turn", async () => {
+  inboundCalls = 0;
+  batchCalls = 0;
+  processed.length = 0;
+  const res = await inbound("+15550000000", {
+    type: "system",
+    fromUserId: "CO.OLD",
+    system: { type: "user_changed_number", user_id: "CO.NEW", wa_id: "573001234567" },
+  });
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).system, true);
+  assert.equal(inboundCalls, 1, "the contact is updated");
+  assert.equal(batchCalls, 0, "nothing to answer");
+  assert.equal((processed[0].numberChange as { bsuid: string }).bsuid, "CO.NEW");
+  await settled();
+});
+
+test("a contact the normalizer could not merge leaves one event for the team", async () => {
+  const original = ROW.config;
+  ROW.config = { ...original, buffer_silence_seconds: 3 };
+  events.length = 0;
+  nextIdentityConflict = true;
+  try {
+    await inbound("+15550000000", { type: "text", text: { body: "hola" }, fromUserId: "CO.123" });
+    await settled();
+  } finally {
+    nextIdentityConflict = false;
+    ROW.config = original;
+  }
+  assert.deepEqual(
+    events.map((e) => [e.workspaceId, e.type, e.payload.contact_id]),
+    [["ws_1", "contact_identity_conflict", "ct_1"]],
+  );
+});
+
+test("an inbound event with neither phone nor BSUID is still answered 200 and not stored", async () => {
+  inboundCalls = 0;
+  const res = await inbound("+15550000000", { type: "text", text: { body: "hola" }, from: undefined });
+  assert.equal(res.status, 200);
+  assert.equal(inboundCalls, 0);
 });

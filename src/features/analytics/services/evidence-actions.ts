@@ -7,7 +7,8 @@ import { EvidenceInputSchema } from "../lib/schemas";
 export interface EvidenceRow {
   conversation_id: string;
   contact_name: string | null;
-  contact_phone: string;
+  /** Null for a contact known only by its WhatsApp username. */
+  contact_phone: string | null;
   detected_at: string;
   evidence_body: string | null;
 }

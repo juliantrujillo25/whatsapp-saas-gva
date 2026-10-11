@@ -642,6 +642,9 @@ export async function pushContactToHubSpot(
     console.error("[HS] pushContactToHubSpot: contacto no encontrado", { workspaceId, contactId });
     return { ok: false, code: "contact_not_found" };
   }
+  // HubSpot identifica al cliente por su teléfono (whatsapp_phone): un contacto
+  // que usa nombre de usuario de WhatsApp y no lo compartió espera a tenerlo.
+  if (!row.phone) return { ok: false, code: "no_phone" };
   const contact: HsContactRow = row;
 
   // A stored id that isn't a HubSpot id (written before the CHECK) is not

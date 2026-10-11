@@ -88,7 +88,7 @@ mock.module("next/server", {
 const { updateContact, syncContactCrm } = await import("./contact-actions.ts");
 
 function reset() {
-  contacts = [{ id: "contact_1", workspace_id: "ws_1", name: "Ana", email: null, tags: ["a"] }];
+  contacts = [{ id: "contact_1", workspace_id: "ws_1", name: "Ana", phone: "+5215512345678", email: null, tags: ["a"] }];
   currentUser = { id: "user_1" };
   memberResult = { ok: true, userId: "user_1", role: "agent" };
   memberCalls.length = 0;
@@ -125,6 +125,16 @@ test("syncContactCrm traduce cada motivo a un mensaje en español", async () => 
   assert.equal((await syncContactCrm("contact_1")).error, "Falta probar la conexión de HubSpot en Configuración → Integraciones.");
   manualResult = { ok: false, reason: "failed", code: "unexpected_error" };
   assert.equal((await syncContactCrm("contact_1")).error, "No pudimos sincronizar con el CRM. Intenta de nuevo.");
+});
+
+test("syncContactCrm: un contacto sin teléfono (usuario de WhatsApp) no se manda al CRM y se explica", async () => {
+  reset();
+  contacts = [{ id: "contact_1", workspace_id: "ws_1", name: "Ana", phone: null, email: null, tags: [] }];
+  manualResult = { ok: true, provider: "hubspot", id: "hs_42" };
+  const result = await syncContactCrm("contact_1");
+  assert.equal(result.ok, false);
+  assert.match(result.error ?? "", /aún no compartió su número de teléfono/);
+  assert.deepEqual(manualCalls, []);
 });
 
 test("syncContactCrm: si el sync lanza, responde ok:false sin detalle técnico", async () => {

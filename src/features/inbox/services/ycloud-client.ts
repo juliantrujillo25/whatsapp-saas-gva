@@ -32,10 +32,27 @@ export interface SendTextResult {
   status: string;
 }
 
+/**
+ * Who a message goes to: the phone (`to`) or, for a contact known only by its
+ * WhatsApp BSUID, `recipient`. YCloud sends to `to` when both are given, so
+ * only one of them is put in the request.
+ */
+export function addressee(
+  to: string | null | undefined,
+  recipient: string | null | undefined,
+): { to: string } | { recipient: string } {
+  if (to) return { to };
+  if (recipient) return { recipient };
+  throw new Error("YCloud send needs a phone number or a BSUID");
+}
+
 interface SendTextParams {
   apiKey: string;
   from: string;
-  to: string;
+  /** The contact's phone; null for a contact known only by BSUID. */
+  to: string | null;
+  /** The contact's BSUID, used when there is no phone. */
+  recipient?: string | null;
   body: string;
 }
 
@@ -46,7 +63,7 @@ interface SendTextParams {
 export async function sendText(
   params: SendTextParams,
 ): Promise<SendTextResult> {
-  const { apiKey, from, to, body } = params;
+  const { apiKey, from, to, recipient, body } = params;
 
   const response = await fetch(YCLOUD_MESSAGES_URL, {
     method: "POST",
@@ -58,7 +75,7 @@ export async function sendText(
     body: JSON.stringify({
       type: "text",
       from,
-      to,
+      ...addressee(to, recipient),
       text: { body },
     }),
   });
@@ -94,7 +111,9 @@ export async function sendText(
 export interface TemplateParams {
   apiKey: string;
   from: string; // E.164
-  to: string; // E.164
+  to: string | null; // E.164; null for a contact known only by BSUID
+  /** The contact's BSUID, used when there is no phone. */
+  recipient?: string | null;
   templateName: string;
   /** Default 'es'. NEVER 'es_PA' — Movinsa production gotcha */
   language?: string;
@@ -126,6 +145,7 @@ export async function sendTemplate(
     apiKey,
     from,
     to,
+    recipient,
     templateName,
     language = "es",
     components,
@@ -141,7 +161,7 @@ export async function sendTemplate(
     body: JSON.stringify({
       type: "template",
       from,
-      to,
+      ...addressee(to, recipient),
       template: {
         name: templateName,
         language: { code: language },
@@ -167,6 +187,73 @@ export async function sendTemplate(
 
   const data = responseBody as Record<string, unknown>;
 
+  return {
+    id: typeof data.id === "string" ? data.id : "",
+    wamid: typeof data.wamid === "string" ? data.wamid : "",
+    status: typeof data.status === "string" ? data.status : "accepted",
+  };
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// sendRequestContactInfo
+// ──────────────────────────────────────────────────────────────────────────────
+
+export interface RequestContactInfoParams {
+  apiKey: string;
+  from: string; // E.164
+  to: string | null;
+  recipient?: string | null;
+  /** The text shown above the "share contact info" button. */
+  body: string;
+}
+
+/**
+ * Asks the contact for their phone number with WhatsApp's interactive
+ * `request_contact_info` message. The contact decides whether to share it;
+ * if they do, YCloud delivers an inbound `contacts` message whose
+ * `origin` is `contact_request`. Needs the 24h window, like any free message.
+ * Throws YCloudError on non-2xx responses.
+ */
+export async function sendRequestContactInfo(
+  params: RequestContactInfoParams,
+): Promise<SendTextResult> {
+  const { apiKey, from, to, recipient, body } = params;
+
+  const response = await fetch(YCLOUD_MESSAGES_URL, {
+    method: "POST",
+    signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-Key": apiKey,
+    },
+    body: JSON.stringify({
+      type: "interactive",
+      from,
+      ...addressee(to, recipient),
+      interactive: {
+        type: "request_contact_info",
+        body: { text: body },
+        action: { name: "request_contact_info" },
+      },
+    }),
+  });
+
+  let responseBody: unknown;
+  try {
+    responseBody = await response.json();
+  } catch {
+    responseBody = null;
+  }
+
+  if (!response.ok) {
+    throw new YCloudError(
+      response.status,
+      responseBody,
+      `YCloud requestContactInfo error ${response.status}`,
+    );
+  }
+
+  const data = responseBody as Record<string, unknown>;
   return {
     id: typeof data.id === "string" ? data.id : "",
     wamid: typeof data.wamid === "string" ? data.wamid : "",

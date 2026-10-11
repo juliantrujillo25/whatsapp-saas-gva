@@ -148,7 +148,7 @@ function EvidenceDialogBody({
           {state.rows.map((r) => (
             <li key={r.conversation_id} className="space-y-1 py-3 text-sm">
               <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <span className="font-medium">{r.contact_name ?? r.contact_phone}</span>
+                <span className="font-medium">{r.contact_name ?? r.contact_phone ?? "Sin número"}</span>
                 <time className="text-xs text-muted-foreground" dateTime={r.detected_at}>
                   {new Date(r.detected_at).toLocaleDateString("es-CL")}
                 </time>

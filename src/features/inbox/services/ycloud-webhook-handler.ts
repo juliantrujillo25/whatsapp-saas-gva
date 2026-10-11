@@ -60,8 +60,25 @@ export function verifyYCloudSignature(
 export interface NormalizedInbound {
   /** The workspace phone number (E.164) that received the message */
   workspacePhone: string;
-  /** Sender phone number (E.164) */
-  from: string;
+  /**
+   * Sender phone number (E.164). Null when the sender adopted a WhatsApp
+   * username and has not shared it: then `bsuid` is the only identity.
+   */
+  from: string | null;
+  /** WhatsApp business-scoped user ID of the sender (fromUserId). */
+  bsuid: string | null;
+  /** The parent BSUID, only when Meta enabled it for linked portfolios. */
+  parentBsuid: string | null;
+  /** The sender's WhatsApp username, when they have one (profile data). */
+  username: string | null;
+  /**
+   * A phone number the sender shared in answer to OUR request-contact-info
+   * message (contacts[].origin === "contact_request"). A contact card they
+   * forwarded of somebody else never lands here.
+   */
+  sharedPhone: string | null;
+  /** The sender changed their phone number: their new identifiers. */
+  numberChange: { bsuid: string; parentBsuid: string | null; phone: string | null } | null;
   /** Message type as reported by YCloud */
   type: string;
   /** The provider's own message type, before clamping (e.g. "reaction"). */
@@ -116,6 +133,53 @@ function toMessageType(raw: string): string {
   return MESSAGE_TYPE_ENUM.has(raw) ? raw : "text";
 }
 
+function nonEmpty(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+/** "16315551111" or "+16315551111" as "+16315551111". */
+function asE164(value: string): string {
+  const digits = value.replace(/[^0-9]/g, "");
+  return digits ? `+${digits}` : "";
+}
+
+/**
+ * The phone number in the sender's answer to a request-contact-info message.
+ * Only `origin: "contact_request"` counts: a contact card the user forwards of
+ * someone else carries another person's number.
+ */
+function requestedContactPhone(contacts: unknown): string | null {
+  if (!Array.isArray(contacts)) return null;
+  for (const contact of contacts) {
+    if (typeof contact !== "object" || contact === null) continue;
+    const c = contact as Record<string, unknown>;
+    if (c.origin !== "contact_request" || !Array.isArray(c.phones)) continue;
+    for (const entry of c.phones) {
+      if (typeof entry !== "object" || entry === null) continue;
+      const e = entry as Record<string, unknown>;
+      const phone = nonEmpty(e.phone) ?? nonEmpty(e.wa_id);
+      const e164 = phone ? asE164(phone) : "";
+      if (e164) return e164;
+    }
+  }
+  return null;
+}
+
+/** The new identifiers of a `user_changed_number` system message. */
+function userChangedNumber(system: unknown): NormalizedInbound["numberChange"] {
+  if (typeof system !== "object" || system === null) return null;
+  const s = system as Record<string, unknown>;
+  if (s.type !== "user_changed_number") return null;
+  const bsuid = nonEmpty(s.user_id);
+  if (!bsuid) return null;
+  const wa = nonEmpty(s.wa_id);
+  return {
+    bsuid,
+    parentBsuid: nonEmpty(s.parent_user_id),
+    phone: wa ? asE164(wa) || null : null,
+  };
+}
+
 /**
  * Why parseInbound() returned null for a body — for the webhook's log only.
  * Reports the event type, which required fields are missing and the KEY names
@@ -135,8 +199,10 @@ export function describeInboundDrop(body: unknown): Record<string, unknown> {
     return { reason: "no_whatsappInboundMessage", eventKeys: Object.keys(event) };
   }
   const message = wim as Record<string, unknown>;
-  const missing = ["wamid", "from", "to"].filter(
-    (k) => typeof message[k] !== "string" || !message[k],
+  const has = (k: string) => typeof message[k] === "string" && message[k] !== "";
+  // The sender is a phone (`from`) or a BSUID (`fromUserId`): one is enough.
+  const missing = ["wamid", "from", "to"].filter((k) =>
+    k === "from" ? !has("from") && !has("fromUserId") : !has(k),
   );
   return {
     reason: missing.length > 0 ? "missing_fields" : "unparseable",
@@ -171,8 +237,11 @@ export function parseInbound(body: unknown): NormalizedInbound | null {
     const wamid = wimObj.wamid;
     if (typeof wamid !== "string" || !wamid) return null;
 
-    const from = wimObj.from;
-    if (typeof from !== "string" || !from) return null;
+    // The sender: a phone (`from`), a BSUID (`fromUserId`), or both. A user who
+    // adopted a username arrives with the BSUID only.
+    const from = nonEmpty(wimObj.from);
+    const bsuid = nonEmpty(wimObj.fromUserId);
+    if (!from && !bsuid) return null;
 
     const to = wimObj.to;
     if (typeof to !== "string" || !to) return null;
@@ -185,11 +254,13 @@ export function parseInbound(body: unknown): NormalizedInbound | null {
         : new Date().toISOString();
 
     let customerName: string | null = null;
+    let username: string | null = null;
     const profile = wimObj.customerProfile;
     if (typeof profile === "object" && profile !== null) {
       const profileObj = profile as Record<string, unknown>;
       customerName =
         typeof profileObj.name === "string" ? profileObj.name : null;
+      username = nonEmpty(profileObj.username);
     }
 
     let text: string | null = null;
@@ -231,9 +302,20 @@ export function parseInbound(body: unknown): NormalizedInbound | null {
       text = inboundContentText(wimObj, msgType);
     }
 
+    const sharedPhone = msgType === "contacts" ? requestedContactPhone(wimObj.contacts) : null;
+    if (sharedPhone) text = "[El cliente compartió su número de teléfono]";
+
+    const numberChange = msgType === "system" ? userChangedNumber(wimObj.system) : null;
+    if (numberChange) text = "[El cliente cambió su número de teléfono]";
+
     return {
       workspacePhone: to,
       from,
+      bsuid,
+      parentBsuid: nonEmpty(wimObj.fromParentUserId),
+      username,
+      sharedPhone,
+      numberChange,
       type: toMessageType(msgType),
       rawType: msgType,
       text,

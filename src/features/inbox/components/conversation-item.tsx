@@ -3,23 +3,17 @@ import type {
   ConversationWithContact,
   ConversationState,
 } from "@/features/inbox/types";
+import {
+  contactHandle,
+  contactInitials,
+  contactTitle,
+} from "@/features/inbox/lib/contact-display";
 import { StateBadge } from "./state-badge";
 
 interface ConversationItemProps {
   conversation: ConversationWithContact;
   isActive: boolean;
   onClick: () => void;
-}
-
-function getInitials(name: string | null, phone: string): string {
-  if (name && name.trim().length > 0) {
-    const parts = name.trim().split(/\s+/);
-    if (parts.length >= 2) {
-      return (parts[0][0] + parts[1][0]).toUpperCase();
-    }
-    return name.trim().slice(0, 2).toUpperCase();
-  }
-  return phone.slice(-4);
 }
 
 function timeAgo(dateStr: string | null): string {
@@ -49,8 +43,8 @@ export function ConversationItem({
   onClick,
 }: ConversationItemProps) {
   const { contact, last_message, unread_count, last_message_at } = conversation;
-  const displayName = contact.name ?? contact.phone;
-  const initials = getInitials(contact.name, contact.phone);
+  const displayName = contactTitle(contact);
+  const initials = contactInitials(contact);
   const preview = truncate(last_message?.body ?? null, 60);
   const time = timeAgo(last_message_at);
 
@@ -109,7 +103,7 @@ export function ConversationItem({
         </div>
 
         <p className="font-mono text-[10px] text-muted-foreground/60">
-          {contact.phone}
+          {contactHandle(contact)}
         </p>
       </div>
     </button>

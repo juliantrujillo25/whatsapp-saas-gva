@@ -10,6 +10,7 @@ import { useState, useTransition, KeyboardEvent } from "react";
 import { User, RefreshCw, Save, ChevronDown, ChevronUp, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { contactHandle } from "@/features/inbox/lib/contact-display";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
@@ -190,7 +191,7 @@ export function CrmPanel({
               <Initials name={name || contact.name} />
               <div className="min-w-0 flex-1">
                 <p className="text-[10px] text-muted-foreground font-mono truncate">
-                  {contact.phone}
+                  {contactHandle(contact)}
                 </p>
               </div>
             </div>

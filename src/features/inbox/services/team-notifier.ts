@@ -13,6 +13,7 @@ import { createClient as createSbClient } from "@supabase/supabase-js";
 import { logEvent, wasRecentlyLogged } from "./handoff-notifier";
 import { emitEventOncePerDay } from "./daily-events";
 import { loadWhatsAppSettings } from "./whatsapp-provider";
+import { contactHandle } from "../lib/contact-display";
 
 function svc() {
   return createSbClient(
@@ -77,7 +78,9 @@ interface ConversationContactIdRow {
 
 interface ContactNamePhoneRow {
   name: string | null;
-  phone: string;
+  /** Null for a contact known only by its WhatsApp username. */
+  phone: string | null;
+  username?: string | null;
 }
 
 /**
@@ -285,7 +288,7 @@ export async function notifyTeamHandoff(
 
     const { data: contactRow, error: contactError } = await supabase
       .from("contacts")
-      .select("name, phone")
+      .select("name, phone, username")
       .eq("id", contactId)
       .eq("workspace_id", workspaceId)
       .maybeSingle();
@@ -311,9 +314,8 @@ export async function notifyTeamHandoff(
       );
     } else if (contactRow) {
       const contact = contactRow as ContactNamePhoneRow;
-      contactLabel = contact.name
-        ? `${contact.name} (${contact.phone})`
-        : contact.phone;
+      const handle = contactHandle(contact);
+      contactLabel = contact.name ? `${contact.name} (${handle})` : handle;
       if (contact.name) subjectLabel = contact.name;
     } else {
       // Anomalía de datos: el contact_id de la conversación no calza con

@@ -54,7 +54,8 @@ export function InboxLayout({
       const matchesSearch =
         q === "" ||
         (c.contact.name ?? "").toLowerCase().includes(q) ||
-        c.contact.phone.toLowerCase().includes(q);
+        (c.contact.phone ?? "").toLowerCase().includes(q) ||
+        (c.contact.username ?? "").toLowerCase().includes(q);
 
       const matchesTab =
         activeTab === "all" ||
