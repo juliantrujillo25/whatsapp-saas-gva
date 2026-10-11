@@ -117,6 +117,36 @@ function toMessageType(raw: string): string {
 }
 
 /**
+ * Why parseInbound() returned null for a body — for the webhook's log only.
+ * Reports the event type, which required fields are missing and the KEY names
+ * of the message object; never any value (no phone numbers, text or names).
+ */
+export function describeInboundDrop(body: unknown): Record<string, unknown> {
+  if (typeof body !== "object" || body === null) {
+    return { reason: "body_not_object" };
+  }
+  const event = body as Record<string, unknown>;
+  const eventType = typeof event.type === "string" ? event.type : null;
+  if (eventType !== "whatsapp.inbound_message.received") {
+    return { reason: "not_inbound_event", eventType };
+  }
+  const wim = event.whatsappInboundMessage;
+  if (typeof wim !== "object" || wim === null) {
+    return { reason: "no_whatsappInboundMessage", eventKeys: Object.keys(event) };
+  }
+  const message = wim as Record<string, unknown>;
+  const missing = ["wamid", "from", "to"].filter(
+    (k) => typeof message[k] !== "string" || !message[k],
+  );
+  return {
+    reason: missing.length > 0 ? "missing_fields" : "unparseable",
+    missing,
+    messageKeys: Object.keys(message),
+    messageType: typeof message.type === "string" ? message.type : null,
+  };
+}
+
+/**
  * Parses and normalises a raw YCloud webhook body.
  * Returns null if the event is not an inbound message or is malformed.
  */
