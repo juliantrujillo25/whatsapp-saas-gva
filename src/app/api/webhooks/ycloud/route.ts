@@ -3,6 +3,7 @@ import { createClient as createSbClient } from "@supabase/supabase-js";
 import {
   verifyYCloudSignature,
   parseInbound,
+  describeInboundDrop,
 } from "@/features/inbox/services/ycloud-webhook-handler";
 import { processInbound } from "@/features/inbox/services/normalizer";
 import { checkRateLimits } from "@/features/inbox/services/cost-tracker";
@@ -193,6 +194,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     const normalized = parseInbound(body);
     if (!normalized) {
+      // A verified event we could not turn into a message: answer 200 so
+      // YCloud doesn't retry, but say why (key names only — SEC-09).
+      console.warn("[webhook] ycloud inbound dropped", {
+        workspaceId: ws.workspace_id,
+        ...describeInboundDrop(body),
+      });
       return NextResponse.json({ received: true });
     }
 
