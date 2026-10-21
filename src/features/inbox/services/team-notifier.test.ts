@@ -87,6 +87,7 @@ const fakeClient = {
           return chain;
         },
         eq: () => chain,
+        in: () => chain,
         gte: () => chain,
         contains: () => chain,
         limit: async () => teamEventsRow,
@@ -108,7 +109,7 @@ mock.module("@supabase/supabase-js", {
 });
 
 
-const { notifyTeamHandoff } = await import("./team-notifier.ts");
+const { notifyTeamHandoff, notifyTeamFollowUp } = await import("./team-notifier.ts");
 
 function reset() {
   membershipsRow = {
@@ -706,4 +707,44 @@ test("el tope de destinatarios se aplica después de filtrar, con los admins pri
   assert.equal(emails.length, 20);
   assert.deepEqual(emails[0].to, ["jefa@ws.com"], "the admin is never crowded out");
   assert.ok(!emails.some((e) => e.to[0] === "baja@ws.com"));
+});
+
+test("seguimiento: un mensaje nuevo en handoff_pending avisa con asunto propio y registra handoff_followup_notified", async () => {
+  reset();
+  const fetchCalls: unknown[] = [];
+  globalThis.fetch = (async (url: string, init: unknown) => {
+    fetchCalls.push({ url, init });
+    return { ok: true } as Response;
+  }) as typeof fetch;
+
+  await notifyTeamFollowUp({ workspaceId: "ws_1", conversationId: "conv_1" });
+
+  assert.equal(fetchCalls.length, 1);
+  const call = fetchCalls[0] as { init: { body: string } };
+  const emails = JSON.parse(call.init.body) as Array<{ text: string; subject: string }>;
+  assert.match(emails[0].subject, /^Nuevo mensaje de un cliente en espera: Juanita$/);
+  assert.match(emails[0].text, /escribió otro mensaje/);
+  assert.match(emails[0].text, /Juanita/);
+  assert.equal(eventsOfType("handoff_followup_notified").length, 1);
+  assert.equal(eventsOfType("handoff_team_notified").length, 0);
+});
+
+test("seguimiento: el dedupe es el suyo, no el del aviso de handoff", async () => {
+  reset();
+  teamEventsRow = { data: [{ id: "evt_1" }], error: null };
+  const fetchCalls: unknown[] = [];
+  globalThis.fetch = (async () => {
+    fetchCalls.push(1);
+    return { ok: true } as Response;
+  }) as typeof fetch;
+
+  await notifyTeamFollowUp({ workspaceId: "ws_1", conversationId: "conv_1" });
+
+  assert.equal(fetchCalls.length, 0);
+  const skipped = eventsOfType("handoff_team_notify_skipped");
+  assert.equal(skipped.length, 1);
+  assert.equal(
+    (skipped[0].row as { payload: { reason: string } }).payload.reason,
+    "deduped",
+  );
 });

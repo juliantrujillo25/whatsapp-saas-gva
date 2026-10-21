@@ -47,7 +47,18 @@ const TRIGGER_LABELS: Record<string, string> = {
   tool_failed:
     "una acción de agenda falló o no se pudo confirmar, y se le dijo al cliente que una persona lo revisará",
   write_unconfirmed: "una acción de la IA no se pudo confirmar; revisa qué quedó hecho",
+  followup: "el cliente escribió otro mensaje mientras espera a una persona",
 };
+
+/** Event types written when a notice goes out. Follow-ups have their own
+ * dedupe window so an earlier handoff email does not swallow them. */
+const SENT_EVENT_TYPE = {
+  handoff: "handoff_team_notified",
+  followup: "handoff_followup_notified",
+} as const;
+
+/** Both kinds count against the hourly cap: a burst of either is still a burst. */
+const CAPPED_EVENT_TYPES = [SENT_EVENT_TYPE.handoff, SENT_EVENT_TYPE.followup];
 
 function describeTrigger(trigger: string): string {
   const bare = trigger.replace(/^tool(_unsent)?:/, "");
@@ -58,11 +69,46 @@ function describeTrigger(trigger: string): string {
   );
 }
 
+/**
+ * Aviso al equipo por un mensaje nuevo de un cliente que ya está en
+ * `handoff_pending`. Lo llama buffer.ts cuando decide() se abstiene por ese
+ * estado. Nunca lanza, igual que notifyTeamHandoff.
+ */
+export async function notifyTeamFollowUp(
+  params: Pick<TeamHandoffParams, "workspaceId" | "conversationId">,
+): Promise<void> {
+  await notifyTeamHandoff({ ...params, trigger: "followup", kind: "followup" });
+}
+
 export interface TeamHandoffParams {
   workspaceId: string;
   conversationId: string;
   /** Lo mismo que le llega a notifyHandoffPending: keyword | manual | agent | cost_cut | tool:*|tool_unsent:* */
   trigger: string;
+  /**
+   * "handoff": the conversation just entered handoff_pending.
+   * "followup": the contact wrote again while it was already waiting for a
+   * person (the AI abstains, so nobody else would hear about the message).
+   */
+  kind?: "handoff" | "followup";
+}
+
+/** Asunto y primera línea del correo según el tipo de aviso. */
+function noticeOpening(
+  kind: "handoff" | "followup",
+  contactLabel: string,
+  subjectLabel: string,
+) {
+  if (kind === "followup") {
+    return {
+      subject: `Nuevo mensaje de un cliente en espera: ${subjectLabel}`,
+      line: `${contactLabel} escribió otro mensaje y sigue esperando que una persona lo atienda.`,
+    };
+  }
+  return {
+    subject: `Un cliente necesita ayuda: ${subjectLabel}`,
+    line: `${contactLabel} necesita que una persona tome la conversación.`,
+  };
 }
 
 interface MembershipEmailRow {
@@ -91,6 +137,8 @@ export async function notifyTeamHandoff(
   params: TeamHandoffParams,
 ): Promise<void> {
   const { workspaceId, conversationId, trigger } = params;
+  const kind = params.kind ?? "handoff";
+  const sentType = SENT_EVENT_TYPE[kind];
 
   try {
     const supabase = svc();
@@ -127,7 +175,7 @@ export async function notifyTeamHandoff(
       await wasRecentlyLogged(
         workspaceId,
         conversationId,
-        "handoff_team_notified",
+        sentType,
         TEAM_NOTIFY_DEDUPE_MINUTES,
       )
     ) {
@@ -149,7 +197,7 @@ export async function notifyTeamHandoff(
       .from("events")
       .select("id", { count: "exact", head: true })
       .eq("workspace_id", workspaceId)
-      .eq("type", "handoff_team_notified")
+      .in("type", CAPPED_EVENT_TYPES)
       .gte("created_at", hourAgo);
     if (capError) {
       console.error("[team-notifier] hourly cap query failed:", capError.message);
@@ -335,10 +383,11 @@ export async function notifyTeamHandoff(
     const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
     const link = `${appUrl}/inbox/${conversationId}`;
     const reasonText = describeTrigger(trigger);
+    const opening = noticeOpening(kind, contactLabel, subjectLabel);
 
     const text =
       `Hola,\n\n` +
-      `${contactLabel} necesita que una persona tome la conversación.\n` +
+      `${opening.line}\n` +
       `Motivo: ${reasonText}.\n\n` +
       `Puedes verla acá: ${link}\n`;
 
@@ -356,7 +405,7 @@ export async function notifyTeamHandoff(
           recipients.map((to) => ({
             from,
             to: [to],
-            subject: `Un cliente necesita ayuda: ${subjectLabel}`,
+            subject: opening.subject,
             text,
           })),
         ),
@@ -383,13 +432,10 @@ export async function notifyTeamHandoff(
     }
 
     if (resendOk) {
-      await logEvent(
-        workspaceId,
-        conversationId,
-        "handoff_team_notified",
-        "info",
-        { trigger, recipients: recipients.length },
-      );
+      await logEvent(workspaceId, conversationId, sentType, "info", {
+        trigger,
+        recipients: recipients.length,
+      });
     } else {
       await logEvent(
         workspaceId,
