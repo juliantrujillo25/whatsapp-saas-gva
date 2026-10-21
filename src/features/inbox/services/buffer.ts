@@ -812,6 +812,19 @@ export async function processNextBatch(): Promise<ProcessBatchResult> {
 
     if (decision !== "respond") {
       console.info("[buffer] not responding:", decision, reason);
+      // The contact is already waiting for a person and wrote again: the AI
+      // stays silent, so the team is the only one who can see this message.
+      if (reason === "state:handoff_pending") {
+        try {
+          const { notifyTeamFollowUp } = await import("./team-notifier");
+          await notifyTeamFollowUp({
+            workspaceId: batch.workspace_id,
+            conversationId: batch.conversation_id,
+          });
+        } catch (notifyErr) {
+          console.error("[buffer] handoff follow-up email failed:", notifyErr);
+        }
+      }
       await markBatchProcessed(batch, mergedText, supabase);
       return done();
     }
